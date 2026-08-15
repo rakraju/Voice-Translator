@@ -8,7 +8,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.aarkay.voicetranslator"
+        applicationId = "com.AARKAYSVoiceTranslator.myapp"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
