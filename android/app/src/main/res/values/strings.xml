@@ -2,5 +2,5 @@
     <string name="app_name">Voice Translator</string>
     <!-- Change this to your hosted backend HTTPS URL (e.g. "https://my-translator.onrender.com") -->
     <!-- For local testing on emulator, you can use "http://10.0.2.2:5000" or your local network IP (e.g. "https://192.168.0.30:5000") -->
-    <string name="web_app_url">https://aarkays-voice-translator.onrender.com</string>
+    <string name="web_app_url">https://voice-translator-3fkt.onrender.com</string>
 </resources>
