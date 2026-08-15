@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Aarkay's Voice Translator</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Main Style Sheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Desktop Mock Phone Frame -->
+        <div class="phone-frame">
+            <div class="phone-notch"></div>
+            <div class="phone-content">
+                
+                <!-- Splash / Welcome Screen -->
+                <div id="splash-screen" class="screen active">
+                    <div class="splash-logo">
+                        <div class="logo-icon">
+                            <i class="fa-solid fa-microphone-lines"></i>
+                        </div>
+                        <h1>Aarkay's Voice Translator</h1>
+                        <p>Lively Voice Translation</p>
+                    </div>
+                    <div class="splash-footer">
+                        <button id="btn-start-app" class="btn btn-primary">
+                            Get Started <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Main Translator Screen -->
+                <div id="translator-screen" class="screen">
+                    <header class="app-header">
+                        <div class="header-title">
+                            <h2>Aarkay's Translator</h2>
+                            <div class="connection-badge">
+
+                                <span class="dot online"></span> Live
+                            </div>
+                        </div>
+                        <button id="btn-open-settings" class="icon-button" title="Settings">
+                            <i class="fa-solid fa-sliders"></i>
+                        </button>
+                    </header>
+
+                    <!-- Language Selector Bar -->
+                    <div class="language-selector-bar">
+                        <div class="lang-select-box" id="src-lang-box">
+                            <span class="lang-label">From</span>
+                            <select id="select-src-lang">
+                                <option value="en-IN">English (India)</option>
+                                <option value="hi-IN" selected>Hindi (हिन्दी)</option>
+                                <option value="ta-IN">Tamil (தமிழ்)</option>
+                                <option value="te-IN">Telugu (తెలుగు)</option>
+                                <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+                                <option value="ml-IN">Malayalam (മലയാളம்)</option>
+                                <option value="bn-IN">Bengali (বাংলা)</option>
+                                <option value="mr-IN">Marathi (मराठी)</option>
+                                <option value="gu-IN">Gujarati (ગુજરાતી)</option>
+                                <option value="pa-IN">Punjabi (ਪੰਜਾਬੀ)</option>
+                                <option value="ur-IN">Urdu (اردو)</option>
+                                <option value="es-ES">Spanish (Español)</option>
+                                <option value="fr-FR">French (Français)</option>
+                                <option value="de-DE">German (Deutsch)</option>
+                                <option value="ja-JP">Japanese (日本語)</option>
+                            </select>
+                        </div>
+
+                        <button id="btn-swap-languages" class="swap-button" title="Swap languages">
+                            <i class="fa-solid fa-arrow-right-arrow-left"></i>
+                        </button>
+
+                        <div class="lang-select-box" id="tgt-lang-box">
+                            <span class="lang-label">To</span>
+                            <select id="select-tgt-lang">
+                                <option value="en-IN" selected>English (India)</option>
+                                <option value="hi-IN">Hindi (हिन्दी)</option>
+                                <option value="ta-IN">Tamil (தமிழ்)</option>
+                                <option value="te-IN">Telugu (తెలుగు)</option>
+                                <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+                                <option value="ml-IN">Malayalam (മലയാളம்)</option>
+                                <option value="bn-IN">Bengali (বাংলা)</option>
+                                <option value="mr-IN">Marathi (मराठी)</option>
+                                <option value="gu-IN">Gujarati (ગુજરાતી)</option>
+                                <option value="pa-IN">Punjabi (ਪੰਜਾਬੀ)</option>
+                                <option value="ur-IN">Urdu (اردو)</option>
+                                <option value="es-ES">Spanish (Español)</option>
+                                <option value="fr-FR">French (Français)</option>
+                                <option value="de-DE">German (Deutsch)</option>
+                                <option value="ja-JP">Japanese (日本語)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Translation History / Chat Area -->
+                    <div class="chat-container" id="chat-container">
+                        <div class="empty-state" id="empty-state">
+                            <div class="empty-icon">
+                                <i class="fa-solid fa-comments"></i>
+                            </div>
+                            <h3>Start Translating</h3>
+                            <p>Tap the microphone and start speaking. LingoLive will translate and read it aloud.</p>
+                        </div>
+                    </div>
+
+                    <!-- Speech Input Control Area -->
+                    <div class="control-panel">
+                        <!-- Waveform visualization when recording -->
+                        <div class="wave-visualizer" id="wave-visualizer">
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                        </div>
+
+                        <div class="status-message" id="status-message">Ready to translate</div>
+
+                        <div class="mic-button-wrapper">
+                            <button id="btn-mic" class="mic-button" title="Tap to speak">
+                                <i class="fa-solid fa-microphone"></i>
+                            </button>
+                        </div>
+
+                        <!-- Keyboard Input Container (Fallback) -->
+                        <div class="keyboard-input-container" id="keyboard-input-container" style="display: none; width: 100%; margin-top: 5px;">
+                            <div style="display: flex; gap: 8px; width: 100%;">
+                                <input type="text" id="text-input-field" placeholder="Or type your message here..." style="flex: 1; padding: 12px 14px; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: rgba(0,0,0,0.3); color: var(--text-main); font-family: var(--font-outfit); outline: none; font-size: 14px;">
+                                <button id="btn-send-text" class="icon-button" style="background: var(--primary); border: none; width: 44px; height: 44px; border-radius: var(--border-radius-sm);"><i class="fa-solid fa-paper-plane"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="action-bar">
+                            <button id="btn-clear-chat" class="text-button" title="Clear conversation">
+                                <i class="fa-solid fa-trash-can"></i> Clear
+                            </button>
+                            <button id="btn-toggle-keyboard" class="text-button" title="Type instead of speaking">
+                                <i class="fa-regular fa-keyboard"></i> Type
+                            </button>
+                            <button id="btn-toggle-continuous" class="text-button" title="Continuous listening">
+                                <i class="fa-solid fa-arrows-spin"></i> Continuous: <span id="continuous-status">OFF</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Modal Drawer -->
+                <div id="settings-drawer" class="drawer">
+                    <div class="drawer-header">
+                        <h3>Settings</h3>
+                        <button id="btn-close-settings" class="icon-button">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                    <div class="drawer-body">
+                        <!-- TTS Settings -->
+                        <div class="settings-group">
+                            <h4>Voice Settings</h4>
+                            <div class="setting-item">
+                                <label for="range-rate">Speech Rate (Speed)</label>
+                                <input type="range" id="range-rate" min="0.5" max="2.0" step="0.1" value="1.0">
+                                <span class="setting-value" id="val-rate">1.0x</span>
+                            </div>
+                            <div class="setting-item">
+                                <label for="range-pitch">Speech Pitch</label>
+                                <input type="range" id="range-pitch" min="0.5" max="2.0" step="0.1" value="1.0">
+                                <span class="setting-value" id="val-pitch">1.0</span>
+                            </div>
+                            <div class="setting-item">
+                                <label for="select-gender">Voice Gender</label>
+                                <select id="select-gender" style="background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); border-radius: var(--border-radius-sm); padding: 8px; color: var(--text-main); font-family: var(--font-outfit); font-size: 13px; outline: none; cursor: pointer; margin-top: 4px; width: 100%;">
+                                    <option value="Female" style="background-color: #121420;" selected>Female (Default)</option>
+                                    <option value="Male" style="background-color: #121420;">Male</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="chk-auto-speak" checked>
+                                    Auto-speak translations
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Mobile Connection instructions -->
+                        <div class="settings-group">
+                            <h4>Connect to Mobile Device</h4>
+                            <p class="settings-help-text">
+                                To run this app on your phone, connect both your computer and phone to the <strong>same Wi-Fi network</strong>.
+                            </p>
+                            <div class="ip-info-box">
+                                <p>Open this URL on your phone:</p>
+                                <div class="ip-url-container">
+                                    <code id="mobile-ip-address"><span id="url-scheme">https</span>://<span id="host-ip">127.0.0.1</span>:5000</code>
+                                    <button id="btn-copy-ip" class="icon-button" title="Copy Link"><i class="fa-regular fa-copy"></i></button>
+
+                                </div>
+                            </div>
+                            <div class="mobile-warning-box">
+                                <i class="fa-solid fa-circle-info"></i>
+                                <span>Note: For speech recognition to work on non-localhost mobile browsers, you may need to bypass HTTPS requirements by visiting <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> and entering this server URL.</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+            <!-- Home Bar Indicator -->
+            <div class="phone-home-indicator"></div>
+        </div>
+    </div>
+
+    <!-- Main JavaScript File -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
