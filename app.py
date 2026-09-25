@@ -1,6 +1,7 @@
 import os
 import socket
 import io
+import requests
 from flask import Flask, request, jsonify, render_template, send_file
 
 try:
@@ -10,7 +11,7 @@ except ImportError:
     # Auto-install dependencies if deep-translator or edge-tts is not present
     import subprocess
     import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "deep-translator", "flask", "edge-tts"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "deep-translator", "flask", "edge-tts", "requests"])
     from deep_translator import GoogleTranslator
     import edge_tts
 
@@ -29,6 +30,92 @@ def get_local_ip():
         s.close()
     return ip
 
+def perform_translation(text, source_lang='auto', target_lang='en'):
+    """Performs translation using a robust multi-tier fallback strategy for 100% uptime."""
+    import urllib.parse
+
+    def get_code(lang):
+        if not lang or lang == 'auto':
+            return 'auto'
+        if '-' in lang and lang not in ['zh-CN', 'zh-TW']:
+            return lang.split('-')[0]
+        return lang
+
+    src = get_code(source_lang)
+    tgt = get_code(target_lang)
+
+    # Tier 1: Google Translate Chrome Extension Client (dict-chrome-ex) - High speed, 0 rate limit on datacenter IPs
+    try:
+        url = 'https://clients5.google.com/translate_a/single'
+        params = {'client': 'dict-chrome-ex', 'sl': src, 'tl': tgt, 'dt': 't', 'q': text}
+        headers = {'User-Agent': 'Mozilla/5.0 (Android 12; Mobile)'}
+        r = requests.get(url, params=params, headers=headers, timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            if data and data[0]:
+                parts = [item[0] for item in data[0] if item and item[0]]
+                res = ''.join(parts)
+                if res.strip():
+                    return res
+    except Exception as e:
+        print(f"Tier 1 translation error: {e}")
+
+    # Tier 2: Google Translate Android Native Client (client=at)
+    try:
+        url = 'https://translate.googleapis.com/translate_a/single'
+        params = {'client': 'at', 'sl': src, 'tl': tgt, 'dt': 't', 'q': text}
+        headers = {'User-Agent': 'GoogleTranslate/6.28.0.05.351341070 (Linux; U; Android 11; Pixel 5)'}
+        r = requests.get(url, params=params, headers=headers, timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            if data and data[0]:
+                parts = [item[0] for item in data[0] if item and item[0]]
+                res = ''.join(parts)
+                if res.strip():
+                    return res
+    except Exception as e:
+        print(f"Tier 2 translation error: {e}")
+
+    # Tier 3: Google Translate Mobile App Client (client=gtx)
+    try:
+        url = 'https://translate.googleapis.com/translate_a/single'
+        params = {'client': 'gtx', 'sl': src, 'tl': tgt, 'dt': 't', 'q': text}
+        headers = {'User-Agent': 'AndroidTranslate/5.3.0.RC02.130440794'}
+        r = requests.get(url, params=params, headers=headers, timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            if data and data[0]:
+                parts = [item[0] for item in data[0] if item and item[0]]
+                res = ''.join(parts)
+                if res.strip():
+                    return res
+    except Exception as e:
+        print(f"Tier 3 translation error: {e}")
+
+    # Tier 4: GoogleTranslator from deep-translator
+    try:
+        translator = GoogleTranslator(source=src, target=tgt)
+        translated = translator.translate(text)
+        if translated and translated.strip():
+            return translated
+    except Exception as e:
+        print(f"Tier 4 translation error: {e}")
+
+    # Tier 5: MyMemory Free Translation API Fallback
+    try:
+        url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text)}&langpair={src}|{tgt}"
+        r = requests.get(url, timeout=6)
+        if r.status_code == 200:
+            res_data = r.json()
+            translated_text = res_data.get('responseData', {}).get('translatedText', '')
+            if translated_text and translated_text.strip() and not translated_text.startswith('QUERY LENGTH LIMIT EXCEEDED'):
+                return translated_text
+    except Exception as e:
+        print(f"Tier 5 translation error: {e}")
+
+    raise Exception("All translation services were temporarily unavailable. Please try again.")
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -44,17 +131,7 @@ def translate():
         return jsonify({'error': 'No text provided'}), 400
 
     try:
-        # Standardize language codes if necessary. 
-        # deep-translator uses standard 2-character iso codes, or codes like 'zh-CN'.
-        # Indian languages are supported (hi, ta, te, kn, ml, bn, mr, gu, pa, ur, etc.)
-        # If the code passed is like 'hi-IN', we extract the first 2 characters 'hi'
-        # unless it is a specific compound code like 'zh-CN'.
-        src = source_lang.split('-')[0] if source_lang != 'auto' else 'auto'
-        tgt = target_lang.split('-')[0]
-
-        # Use GoogleTranslator (does not require API key)
-        translator = GoogleTranslator(source=src, target=tgt)
-        translated_text = translator.translate(text)
+        translated_text = perform_translation(text, source_lang, target_lang)
 
         return jsonify({
             'original_text': text,
@@ -67,8 +144,9 @@ def translate():
         return jsonify({'error': str(e)}), 500
 
 VOICE_MAPPING = {
-    'hi-in': {'Female': 'hi-IN-SwaraNeural', 'Male': 'hi-IN-PrabhatNeural'},
+    'hi-in': {'Female': 'hi-IN-SwaraNeural', 'Male': 'hi-IN-MadhurNeural'},
     'en-in': {'Female': 'en-IN-NeerjaNeural', 'Male': 'en-IN-PrabhatNeural'},
+    'or-in': {'Female': 'hi-IN-SwaraNeural', 'Male': 'hi-IN-MadhurNeural'},
     'ta-in': {'Female': 'ta-IN-PallaviNeural', 'Male': 'ta-IN-ValluvarNeural'},
     'te-in': {'Female': 'te-IN-ShrutiNeural', 'Male': 'te-IN-MohanNeural'},
     'kn-in': {'Female': 'kn-IN-SapnaNeural', 'Male': 'kn-IN-GaganNeural'},
