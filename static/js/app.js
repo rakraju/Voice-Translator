@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // App State
     let isRecording = false;
-    let isContinuous = false;
+    let isContinuous = true;
     let recognition = null;
     let audioContext = null;
     let synth = window.speechSynthesis;
@@ -53,6 +53,13 @@ document.addEventListener('DOMContentLoaded', () => {
         urlScheme.textContent = window.location.protocol.replace(':', '');
     }
     hostIp.textContent = window.location.hostname;
+
+    // Initialize continuous status UI to match default state (ON)
+    if (continuousStatus && btnToggleContinuous) {
+        continuousStatus.textContent = 'ON';
+        continuousStatus.classList.add('active');
+        btnToggleContinuous.classList.add('active');
+    }
     
     // Copy URL helper
     btnCopyIp.addEventListener('click', () => {
@@ -174,6 +181,23 @@ document.addEventListener('DOMContentLoaded', () => {
         splashScreen.classList.remove('active');
         translatorScreen.classList.add('active');
         loadHistory();
+
+        // Warm up and optimize microphone settings (enable hardware Auto Gain Control and Noise Suppression)
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            }).then(stream => {
+                console.log("Audio AGC/AEC/NS initialized successfully");
+                // Stop the tracks immediately after initialization to release the hardware mic
+                stream.getTracks().forEach(track => track.stop());
+            }).catch(err => {
+                console.warn("Failed to initialize microphone audio constraints:", err);
+            });
+        }
     });
 
     // Language swapping
@@ -209,6 +233,7 @@ document.addEventListener('DOMContentLoaded', () => {
             recognition = new SpeechRecognition();
             recognition.interimResults = true;
             recognition.maxAlternatives = 1;
+            recognition.continuous = isContinuous;
 
             recognition.onstart = () => {
                 isRecording = true;
@@ -277,6 +302,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Toggle Continuous Mode
     btnToggleContinuous.addEventListener('click', () => {
         isContinuous = !isContinuous;
+        if (recognition) {
+            recognition.continuous = isContinuous;
+        }
         if (isContinuous) {
             continuousStatus.textContent = 'ON';
             continuousStatus.classList.add('active');
@@ -355,6 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Update language parameters dynamically from selectors
         recognition.lang = selectSrcLang.value;
+        recognition.continuous = isContinuous;
         
         try {
             statusMessage.textContent = 'Connecting to microphone...';
@@ -425,7 +454,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
             });
 
-            const result = await response.getJSON ? await response.getJSON() : await response.json();
+            const result = await response.json();
 
             if (response.ok && result.translated_text) {
                 const targetLangName = selectTgtLang.options[selectTgtLang.selectedIndex].text.split(' ')[0];

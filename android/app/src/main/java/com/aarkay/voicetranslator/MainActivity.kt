@@ -9,8 +9,14 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.app.DownloadManager
+import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.webkit.URLUtil
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 
@@ -44,6 +50,19 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webview)
         setupWebView()
 
+        // Handle back button navigation using OnBackPressedDispatcher (required for Android 16 / target SDK 36)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (webView.canGoBack()) {
+                    webView.goBack()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        })
+
         // Request initial permission on startup so the user is prepared
         checkAndRequestAudioPermission()
     }
@@ -72,14 +91,26 @@ class MainActivity : AppCompatActivity() {
                 }
                 return true
             }
+        }
 
-            override fun onReceivedSslError(
-                view: WebView?,
-                handler: android.webkit.SslErrorHandler?,
-                error: android.net.http.SslError?
-            ) {
-                // Ignore self-signed SSL certificate validation checks for local testing
-                handler?.proceed()
+        // Handle file downloads from WebView (e.g. download TTS translation audio)
+        webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
+            try {
+                val request = DownloadManager.Request(Uri.parse(url))
+                request.setMimeType(mimeType)
+                request.addRequestHeader("User-Agent", userAgent)
+                request.setDescription("Downloading translated audio...")
+                request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimeType))
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                request.setDestinationInExternalPublicDir(
+                    Environment.DIRECTORY_DOWNLOADS,
+                    URLUtil.guessFileName(url, contentDisposition, mimeType)
+                )
+                val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                dm.enqueue(request)
+                Toast.makeText(applicationContext, "Downloading audio...", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(applicationContext, "Failed to download: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
 
@@ -131,12 +162,4 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Handle back button navigation inside WebView
-    override fun onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            super.onBackPressed()
-        }
-    }
 }
