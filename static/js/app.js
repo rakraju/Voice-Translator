@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const valRate = document.getElementById('val-rate');
     const valPitch = document.getElementById('val-pitch');
     const chkAutoSpeak = document.getElementById('chk-auto-speak');
+    const chkContinuous = document.getElementById('chk-continuous');
     
     const hostIp = document.getElementById('host-ip');
     const btnCopyIp = document.getElementById('btn-copy-ip');
@@ -40,30 +41,58 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // App State
     let isRecording = false;
-    let isContinuous = true;
+    let isContinuous = false;
     let recognition = null;
     let audioContext = null;
     let synth = window.speechSynthesis;
     let voices = [];
     let activeBubble = null;
 
+    // Continuous Mode Sentence Buffering
+    let continuousBuffer = '';
+    let continuousSilenceTimer = null;
+    const CONTINUOUS_SILENCE_DELAY = 1400; // 1.4s silence indicates complete sentence
+    let isSpeaking = false;
+
     // Load Local IP info
     const urlScheme = document.getElementById('url-scheme');
     if (urlScheme) {
         urlScheme.textContent = window.location.protocol.replace(':', '');
     }
-    hostIp.textContent = window.location.hostname;
-
-    // Initialize continuous status UI to match default state (ON)
-    if (continuousStatus && btnToggleContinuous) {
-        continuousStatus.textContent = 'ON';
-        continuousStatus.classList.add('active');
-        btnToggleContinuous.classList.add('active');
+    if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        hostIp.textContent = window.location.hostname;
     }
+
+    // Set and synchronize continuous listening state across buttons and settings drawer
+    function setContinuousState(enabled) {
+        isContinuous = Boolean(enabled);
+        if (recognition) {
+            recognition.continuous = isContinuous;
+        }
+        if (continuousStatus) {
+            continuousStatus.textContent = isContinuous ? 'ON' : 'OFF';
+            continuousStatus.classList.toggle('active', isContinuous);
+        }
+        if (btnToggleContinuous) {
+            btnToggleContinuous.classList.toggle('active', isContinuous);
+        }
+        if (chkContinuous) {
+            chkContinuous.checked = isContinuous;
+        }
+        if (!isContinuous) {
+            flushContinuousBuffer();
+            if (isRecording) {
+                stopRecording();
+            }
+        }
+    }
+
+    // Initialize continuous status UI to match default state (strictly OFF)
+    setContinuousState(false);
     
     // Copy URL helper
     btnCopyIp.addEventListener('click', () => {
-        const urlText = `${window.location.protocol}//${window.location.hostname}:5000`;
+        const urlText = `${window.location.protocol}//${hostIp.textContent.trim()}:${window.location.port || '5000'}`;
         navigator.clipboard.writeText(urlText).then(() => {
             btnCopyIp.innerHTML = '<i class="fa-solid fa-check" style="color: var(--accent-green)"></i>';
             setTimeout(() => {
@@ -157,6 +186,12 @@ document.addEventListener('DOMContentLoaded', () => {
     chkAutoSpeak.addEventListener('change', () => {
         localStorage.setItem('translator_autospeak', chkAutoSpeak.checked);
     });
+    if (chkContinuous) {
+        chkContinuous.addEventListener('change', () => {
+            setContinuousState(chkContinuous.checked);
+            localStorage.setItem('translator_continuous', isContinuous);
+        });
+    }
 
     // Load settings from localStorage
     if (localStorage.getItem('translator_rate')) {
@@ -173,6 +208,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (localStorage.getItem('translator_autospeak')) {
         chkAutoSpeak.checked = localStorage.getItem('translator_autospeak') === 'true';
     }
+    if (localStorage.getItem('translator_continuous') !== null) {
+        setContinuousState(localStorage.getItem('translator_continuous') === 'true');
+    }
 
     // Splash navigation
     btnStartApp.addEventListener('click', () => {
@@ -181,6 +219,9 @@ document.addEventListener('DOMContentLoaded', () => {
         splashScreen.classList.remove('active');
         translatorScreen.classList.add('active');
         loadHistory();
+
+        // Ensure Continuous listening mode is strictly OFF by default when opening translator
+        setContinuousState(false);
 
         // Warm up and optimize microphone settings (enable hardware Auto Gain Control and Noise Suppression)
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -269,29 +310,74 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             recognition.onresult = (event) => {
+                if (isSpeaking) {
+                    // Avoid picking up the app's own spoken voice playback
+                    return;
+                }
+
                 let interimTranscript = '';
-                let finalTranscript = '';
+                let newFinalSegment = '';
 
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    const chunk = event.results[i][0].transcript;
                     if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript;
+                        newFinalSegment += chunk + ' ';
                     } else {
-                        interimTranscript += event.results[i][0].transcript;
+                        interimTranscript += chunk;
                     }
                 }
 
-                if (interimTranscript) {
-                    statusMessage.textContent = interimTranscript;
-                }
+                if (isContinuous) {
+                    if (newFinalSegment) {
+                        continuousBuffer += newFinalSegment;
+                    }
 
-                if (finalTranscript) {
-                    statusMessage.textContent = finalTranscript;
-                    processTranslation(finalTranscript);
+                    // Display full continuous accumulation and live interim speech
+                    const currentSpoken = (continuousBuffer + ' ' + interimTranscript).trim();
+                    if (currentSpoken) {
+                        statusMessage.textContent = currentSpoken;
+                    }
+
+                    // Reset silence debounce timer
+                    if (continuousSilenceTimer) {
+                        clearTimeout(continuousSilenceTimer);
+                    }
+
+                    // When speech pauses for 1.4s, translate the accumulated full sentence all at once!
+                    if (continuousBuffer.trim()) {
+                        continuousSilenceTimer = setTimeout(() => {
+                            flushContinuousBuffer();
+                        }, CONTINUOUS_SILENCE_DELAY);
+                    }
+                } else {
+                    // Single-sentence mode (Continuous OFF)
+                    if (interimTranscript) {
+                        statusMessage.textContent = interimTranscript;
+                    }
+                    if (newFinalSegment.trim()) {
+                        statusMessage.textContent = newFinalSegment.trim();
+                        processTranslation(newFinalSegment.trim());
+                        stopRecording();
+                    }
                 }
             };
         } catch (initErr) {
             console.error('Speech recognition init error:', initErr);
             recognition = null;
+        }
+    }
+
+    // Flush accumulated speech buffer in continuous mode for unified translation
+    function flushContinuousBuffer() {
+        if (continuousSilenceTimer) {
+            clearTimeout(continuousSilenceTimer);
+            continuousSilenceTimer = null;
+        }
+        const textToTranslate = continuousBuffer.trim();
+        continuousBuffer = '';
+        if (textToTranslate) {
+            statusMessage.textContent = 'Translating: ' + textToTranslate;
+            processTranslation(textToTranslate);
         }
     }
 
@@ -301,22 +387,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Toggle Continuous Mode
     btnToggleContinuous.addEventListener('click', () => {
-        isContinuous = !isContinuous;
-        if (recognition) {
-            recognition.continuous = isContinuous;
-        }
-        if (isContinuous) {
-            continuousStatus.textContent = 'ON';
-            continuousStatus.classList.add('active');
-            btnToggleContinuous.classList.add('active');
-        } else {
-            continuousStatus.textContent = 'OFF';
-            continuousStatus.classList.remove('active');
-            btnToggleContinuous.classList.remove('active');
-            if (isRecording) {
-                stopRecording();
-            }
-        }
+        setContinuousState(!isContinuous);
+        localStorage.setItem('translator_continuous', isContinuous);
     });
 
     // Keyboard Fallback Events
@@ -358,10 +430,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Mic Click Event
     btnMic.addEventListener('click', () => {
-        // Unlock speech synthesis inside user interaction
-        if (synth && synth.speaking) {
-            synth.cancel();
-        }
+        // Stop any running speech output
+        stopSpeech();
 
         if (!recognition) {
             statusMessage.innerHTML = '<span style="color: var(--accent-red)">Voice input requires HTTPS or Localhost connection. Please use "Type" to translate.</span>';
@@ -378,6 +448,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function startRecording() {
         if (!recognition) return;
         
+        // Stop any active speech
+        stopSpeech();
+
+        // Clear continuous buffer and timer
+        continuousBuffer = '';
+        if (continuousSilenceTimer) {
+            clearTimeout(continuousSilenceTimer);
+            continuousSilenceTimer = null;
+        }
+
         // Clear active bubble context
         activeBubble = null;
         
@@ -397,10 +477,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function stopRecording() {
+        if (continuousSilenceTimer) {
+            clearTimeout(continuousSilenceTimer);
+            continuousSilenceTimer = null;
+        }
+        // If there is pending speech in the buffer, translate it immediately
+        if (continuousBuffer.trim()) {
+            const pending = continuousBuffer.trim();
+            continuousBuffer = '';
+            processTranslation(pending);
+        }
+
         isRecording = false;
         btnMic.classList.remove('recording');
         waveVisualizer.classList.remove('active');
-        if (statusMessage.textContent === 'Listening...' || statusMessage.textContent === 'Connecting to microphone...') {
+        if (statusMessage.textContent === 'Listening...' || statusMessage.textContent.startsWith('Connecting') || statusMessage.textContent.startsWith('Translating')) {
             statusMessage.textContent = 'Ready to translate';
         }
         playBeep('stop');
@@ -502,25 +593,61 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentAudio = null;
 
-    // Text to Speech logic
-    function speakText(text, langCode) {
-        // Stop any currently playing audio
+    function stopSpeech() {
+        isSpeaking = false;
+        if (window.AndroidBridge && typeof window.AndroidBridge.stop === 'function') {
+            try { window.AndroidBridge.stop(); } catch (e) {}
+        }
         if (currentAudio) {
-            currentAudio.pause();
+            try { currentAudio.pause(); } catch (e) {}
             currentAudio = null;
         }
+        if (synth && synth.speaking) {
+            try { synth.cancel(); } catch (e) {}
+        }
+    }
 
+    // Text to Speech logic
+    function speakText(text, langCode) {
+        stopSpeech();
+
+        const rate = parseFloat(rangeRate.value) || 1.0;
+        const pitch = parseFloat(rangePitch.value) || 1.0;
+        const gender = selectGender.value || 'Female';
+
+        isSpeaking = true;
+
+        // 1. Android Native TTS Bridge (Zero latency, runs directly on phone TTS engine)
+        if (window.AndroidBridge && typeof window.AndroidBridge.isAvailable === 'function' && window.AndroidBridge.isAvailable()) {
+            try {
+                const spoken = window.AndroidBridge.speak(text, langCode, rate, pitch);
+                if (spoken) {
+                    const durationMs = Math.max(1200, Math.min(12000, (text.length * 65) / rate));
+                    setTimeout(() => { isSpeaking = false; }, durationMs);
+                    return;
+                }
+            } catch (err) {
+                console.warn("Android native TTS bridge failed, falling back to server audio...", err);
+            }
+        }
+
+        // 2. Server-side Audio Stream (/api/tts with multi-tier Google Translate TTS fallback)
         try {
-            const rate = rangeRate.value;
-            const pitch = rangePitch.value;
-            const gender = selectGender.value;
             const audioUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(langCode)}&rate=${rate}&pitch=${pitch}&gender=${gender}`;
             currentAudio = new Audio(audioUrl);
+            currentAudio.onended = () => { isSpeaking = false; };
+            currentAudio.onerror = () => {
+                isSpeaking = false;
+                console.warn("Server audio playback failed, falling back to Web Speech API");
+                fallbackSpeakText(text, langCode);
+            };
             currentAudio.play().catch(err => {
-                console.warn("Server audio playback failed, falling back to Web Speech API", err);
+                isSpeaking = false;
+                console.warn("Audio play() rejected, falling back to Web Speech API", err);
                 fallbackSpeakText(text, langCode);
             });
         } catch (e) {
+            isSpeaking = false;
             console.warn("Failed to initiate audio play, falling back", e);
             fallbackSpeakText(text, langCode);
         }
@@ -565,7 +692,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const rate = rangeRate.value;
         const pitch = rangePitch.value;
         const gender = selectGender.value;
-        const downloadUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(langCode)}&rate=${rate}&pitch=${pitch}&gender=${gender}`;
+        const downloadUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(langCode)}&rate=${rate}&pitch=${pitch}&gender=${gender}&download=1`;
         const a = document.createElement('a');
         a.href = downloadUrl;
         a.download = `translation_${langCode.split('-')[0]}.mp3`;

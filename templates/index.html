@@ -11,7 +11,7 @@
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Main Style Sheet -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2.0.1">
 </head>
 <body>
     <div class="app-container">
@@ -192,6 +192,12 @@
                                     Auto-speak translations
                                 </label>
                             </div>
+                            <div class="setting-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="chk-continuous">
+                                    Continuous listening mode
+                                </label>
+                            </div>
                         </div>
 
                         <!-- Mobile Connection instructions -->
@@ -203,7 +209,7 @@
                             <div class="ip-info-box">
                                 <p>Open this URL on your phone:</p>
                                 <div class="ip-url-container">
-                                    <code id="mobile-ip-address"><span id="url-scheme">https</span>://<span id="host-ip">127.0.0.1</span>:5000</code>
+                                    <code id="mobile-ip-address"><span id="url-scheme">https</span>://<span id="host-ip">{{ local_ip or '127.0.0.1' }}</span>:5000</code>
                                     <button id="btn-copy-ip" class="icon-button" title="Copy Link"><i class="fa-regular fa-copy"></i></button>
 
                                 </div>
@@ -223,6 +229,6 @@
     </div>
 
     <!-- Main JavaScript File -->
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=2.0.1"></script>
 </body>
 </html>

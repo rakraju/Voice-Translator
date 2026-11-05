@@ -11,11 +11,19 @@ except ImportError:
     # Auto-install dependencies if deep-translator or edge-tts is not present
     import subprocess
     import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "deep-translator", "flask", "edge-tts", "requests"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "deep-translator", "flask", "edge-tts>=7.3.1", "requests", "pyopenssl"])
     from deep_translator import GoogleTranslator
     import edge_tts
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+@app.after_request
+def add_header(response):
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 def get_local_ip():
     """Gets the local IP address of the machine running the server."""
@@ -118,7 +126,7 @@ def perform_translation(text, source_lang='auto', target_lang='en'):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', local_ip=get_local_ip())
 
 @app.route('/api/translate', methods=['POST'])
 def translate():
@@ -195,22 +203,57 @@ def get_voice(lang, gender):
         
     return 'en-US-AriaNeural'
 
-@app.route('/api/tts', methods=['GET'])
-def text_to_speech():
-    text = request.args.get('text', '')
-    lang = request.args.get('lang', 'en')
-    rate = request.args.get('rate', '1.0')
-    pitch = request.args.get('pitch', '1.0')
-    gender = request.args.get('gender', 'Female')
+def generate_google_translate_tts(text, lang='en'):
+    """Fallback TTS using Google Translate TTS service with zero authentication and 100% uptime."""
+    tl = lang.split('-')[0].lower() if lang else 'en'
+    if tl == 'or':
+        tl = 'hi'  # Fallback Odia pronunciation to Hindi on Google Translate TTS
 
-    if not text.strip():
-        return jsonify({'error': 'No text provided'}), 400
+    words = text.split()
+    chunks = []
+    curr = ""
+    for w in words:
+        if len(curr) + len(w) + 1 <= 140:
+            curr = (curr + " " + w).strip()
+        else:
+            if curr:
+                chunks.append(curr)
+            curr = w
+    if curr:
+        chunks.append(curr)
 
+    final_chunks = []
+    for c in chunks:
+        while len(c) > 140:
+            final_chunks.append(c[:140])
+            c = c[140:]
+        if c:
+            final_chunks.append(c)
+    if not final_chunks:
+        final_chunks = [text[:140]]
+
+    fp = io.BytesIO()
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    for chunk in final_chunks:
+        url = 'https://translate.google.com/translate_tts'
+        params = {'ie': 'UTF-8', 'tl': tl, 'client': 'tw-ob', 'q': chunk}
+        r = requests.get(url, params=params, headers=headers, timeout=6)
+        if r.status_code == 200:
+            fp.write(r.content)
+        else:
+            raise Exception(f'Google TTS HTTP status {r.status_code}')
+    fp.seek(0)
+    return fp
+
+def synthesize_speech(text, lang, rate, pitch, gender):
+    """Multi-tier TTS synthesizer: attempts Edge-TTS first, then Google Translate TTS."""
+    # Tier 1: Edge TTS
     try:
         import asyncio
         import edge_tts
 
-        # Convert numeric rate/pitch to edge-tts percentage formats
         try:
             rate_val = float(rate)
             rate_percent = int((rate_val - 1.0) * 100)
@@ -230,38 +273,85 @@ def text_to_speech():
         async def generate_speech():
             communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str)
             fp = io.BytesIO()
+            has_data = False
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
                     fp.write(chunk["data"])
+                    has_data = True
+            if not has_data:
+                raise Exception("Empty audio stream from Edge TTS")
             fp.seek(0)
             return fp
 
-        fp = asyncio.run(generate_speech())
+        return asyncio.run(generate_speech())
+    except Exception as e:
+        print(f"Edge TTS failed ({e}), falling back to Google Translate TTS...")
 
-        return send_file(
+    # Tier 2: Google Translate TTS (Reliable 100% uptime fallback)
+    try:
+        return generate_google_translate_tts(text, lang)
+    except Exception as e:
+        print(f"Google Translate TTS fallback error: {e}")
+
+    raise Exception("All Text-to-Speech services were temporarily unavailable. Please try again.")
+
+@app.route('/api/tts', methods=['GET'])
+def text_to_speech():
+    text = request.args.get('text', '')
+    lang = request.args.get('lang', 'en')
+    rate = request.args.get('rate', '1.0')
+    pitch = request.args.get('pitch', '1.0')
+    gender = request.args.get('gender', 'Female')
+    is_download = request.args.get('download', '0') == '1'
+
+    if not text.strip():
+        return jsonify({'error': 'No text provided'}), 400
+
+    try:
+        fp = synthesize_speech(text, lang, rate, pitch, gender)
+
+        response = send_file(
             fp,
             mimetype='audio/mpeg',
-            as_attachment=True,
+            as_attachment=is_download,
             download_name=f'translated_{gender.lower()}.mp3'
         )
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Cache-Control'] = 'no-cache'
+        return response
     except Exception as e:
         print(f"TTS Generation Error: {e}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    import threading
+    from werkzeug.serving import make_server
+
     local_ip = get_local_ip()
-    port = 5000
-    print("\n" + "="*60)
-    print(" AARKAY'S VOICE TRANSLATOR SERVER IS STARTING (SECURE)...")
-    print(f" * Local Address:   https://localhost:{port}")
-    print(f" * Network Address: https://{local_ip}:{port}")
-    print(" Connect your mobile phone to the SAME Wi-Fi network and enter")
-    print(f" the Network Address above in your mobile browser to run the app!")
-    print(" NOTE: When your phone displays 'Your connection is not private',")
-    print(" tap 'Advanced' -> 'Proceed to...' to continue. This enables")
-    print(" secure microphone access natively.")
-    print("="*60 + "\n")
+    http_port = 5000
+    https_port = 5001
     
-    app.run(host='0.0.0.0', port=port, ssl_context='adhoc', debug=True)
+    print("\n" + "="*65)
+    print(" AARKAY'S VOICE TRANSLATOR SERVER IS RUNNING!")
+    print(f" * Local HTTP (Instant Access): http://localhost:{http_port}")
+    print(f" * Local HTTPS (Secure Mode):   https://localhost:{https_port}")
+    print(f" * Mobile Wi-Fi (HTTP):         http://{local_ip}:{http_port}")
+    print(f" * Mobile Wi-Fi (HTTPS):        https://{local_ip}:{https_port}")
+    print(" TIP: Open http://localhost:5000 directly in your browser.")
+    print(" Microphone works natively on localhost without SSL warnings!")
+    print("="*65 + "\n")
+    
+    srv_http = make_server('0.0.0.0', http_port, app, threaded=True)
+    srv_https = make_server('0.0.0.0', https_port, app, ssl_context='adhoc', threaded=True)
+
+    t_https = threading.Thread(target=srv_https.serve_forever, daemon=True)
+    t_https.start()
+
+    try:
+        srv_http.serve_forever()
+    except KeyboardInterrupt:
+        srv_http.shutdown()
+        srv_https.shutdown()
+
 
 

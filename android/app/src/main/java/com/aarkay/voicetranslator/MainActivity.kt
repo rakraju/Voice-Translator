@@ -15,6 +15,9 @@ import android.net.Uri
 import android.os.Environment
 import android.webkit.URLUtil
 import android.widget.Toast
+import android.speech.tts.TextToSpeech
+import android.webkit.JavascriptInterface
+import java.util.Locale
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -24,6 +27,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private var pendingPermissionRequest: PermissionRequest? = null
+    private var textToSpeech: TextToSpeech? = null
+    private var isTtsReady = false
 
     // Register callback for requesting RECORD_AUDIO permission at runtime
     private val requestAudioPermissionLauncher = registerForActivityResult(
@@ -45,6 +50,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        initTextToSpeech()
         setContentView(R.layout.activity_main)
 
         webView = findViewById(R.id.webview)
@@ -82,6 +88,9 @@ class MainActivity : AppCompatActivity() {
         
         // Enables audio/speech autoplay inside WebView without user gesture
         settings.mediaPlaybackRequiresUserGesture = false
+
+        // Cache mode: ensure webview revalidates with server for latest updates
+        settings.cacheMode = WebSettings.LOAD_DEFAULT
 
         // Open links in WebView itself instead of default browser
         webView.webViewClient = object : WebViewClient() {
@@ -147,6 +156,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Register Android Native Bridge for zero-latency Native Text-to-Speech
+        webView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
+
         // Load the web app URL from strings.xml
         val appUrl = getString(R.string.web_app_url)
         webView.loadUrl(appUrl)
@@ -162,4 +174,73 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun initTextToSpeech() {
+        textToSpeech = TextToSpeech(applicationContext) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                isTtsReady = true
+            }
+        }
+    }
+
+    private fun getLocaleForLanguage(langCode: String): Locale {
+        return try {
+            val tag = langCode.trim().replace("_", "-")
+            val loc = Locale.forLanguageTag(tag)
+            if (loc.language.isNullOrEmpty()) {
+                val base = tag.split("-")[0]
+                Locale.forLanguageTag(base)
+            } else {
+                loc
+            }
+        } catch (_: Exception) {
+            Locale.getDefault()
+        }
+    }
+
+    inner class AndroidBridge {
+        @JavascriptInterface
+        fun speak(text: String, langCode: String, rate: Float, pitch: Float): Boolean {
+            if (!isTtsReady || textToSpeech == null) return false
+            return try {
+                val locale = getLocaleForLanguage(langCode)
+                var langResult = textToSpeech?.setLanguage(locale)
+                if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    val base = langCode.split("-")[0]
+                    langResult = textToSpeech?.setLanguage(Locale(base))
+                }
+                if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    // Device TTS engine does not have this language installed. Return false to trigger web/server TTS stream
+                    return false
+                }
+                textToSpeech?.setSpeechRate(rate)
+                textToSpeech?.setPitch(pitch)
+                val params = Bundle()
+                val utteranceId = "TTS_ID_${System.currentTimeMillis()}"
+                val speakResult = textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+                speakResult == TextToSpeech.SUCCESS
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun stop() {
+            try {
+                textToSpeech?.stop()
+            } catch (_: Exception) {}
+        }
+
+        @JavascriptInterface
+        fun isAvailable(): Boolean {
+            return isTtsReady
+        }
+    }
+
+    override fun onDestroy() {
+        try {
+            textToSpeech?.stop()
+            textToSpeech?.shutdown()
+        } catch (_: Exception) {}
+        super.onDestroy()
+    }
 }
