@@ -39,6 +39,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const textInputField = document.getElementById('text-input-field');
     const btnSendText = document.getElementById('btn-send-text');
 
+    // Camera Notice Scanner Elements
+    const btnOpenScanner = document.getElementById('btn-open-scanner');
+    const btnCloseScanner = document.getElementById('btn-close-scanner');
+    const scannerDrawer = document.getElementById('scanner-drawer');
+    const cameraVideoPreview = document.getElementById('camera-video-preview');
+    const cameraCanvas = document.getElementById('camera-canvas');
+    const btnCaptureShutter = document.getElementById('btn-capture-shutter');
+    const btnChooseCameraPhoto = document.getElementById('btn-choose-camera-photo');
+    const btnChooseGalleryPhoto = document.getElementById('btn-choose-gallery-photo');
+    const cameraFileInput = document.getElementById('camera-file-input');
+    const galleryFileInput = document.getElementById('gallery-file-input');
+    const scannerProcessing = document.getElementById('scanner-processing');
+    const scannerStatusText = document.getElementById('scanner-status-text');
+    const scannerStatusSub = document.getElementById('scanner-status-sub');
+    let cameraStream = null;
+
     // App State
     let isRecording = false;
     let isContinuous = false;
@@ -169,8 +185,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Settings drawer events
-    btnOpenSettings.addEventListener('click', () => settingsDrawer.classList.add('open'));
+    btnOpenSettings.addEventListener('click', () => {
+        settingsDrawer.classList.add('open');
+        if (scannerDrawer) {
+            scannerDrawer.classList.remove('open');
+            stopCamera();
+        }
+    });
     btnCloseSettings.addEventListener('click', () => settingsDrawer.classList.remove('open'));
+
+    // Camera Scanner drawer events
+    if (btnOpenScanner && scannerDrawer) {
+        btnOpenScanner.addEventListener('click', () => {
+            scannerDrawer.classList.add('open');
+            settingsDrawer.classList.remove('open');
+            startCamera();
+        });
+        if (btnCloseScanner) {
+            btnCloseScanner.addEventListener('click', () => {
+                scannerDrawer.classList.remove('open');
+                stopCamera();
+            });
+        }
+    }
     
     rangeRate.addEventListener('input', () => {
         valRate.textContent = `${rangeRate.value}x`;
@@ -588,6 +625,231 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error(err);
             targetBubble.innerHTML = `<span class="bubble-lang" style="color: var(--accent-red)">Error</span>Network error.`;
         }
+        scrollToBottom();
+    }
+
+    // ==========================================
+    // Camera Notice Scanner & OCR Logic
+    // ==========================================
+    async function startCamera() {
+        if (!cameraVideoPreview) return;
+        if (scannerProcessing) scannerProcessing.style.display = 'none';
+
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            try {
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: { ideal: 'environment' },
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    },
+                    audio: false
+                });
+                cameraVideoPreview.srcObject = cameraStream;
+                cameraVideoPreview.play().catch(e => console.warn('Camera preview play error:', e));
+                return;
+            } catch (err) {
+                console.warn('Live camera stream not accessible:', err);
+            }
+        }
+        console.log('WebRTC camera unavailable; phone camera file input ready');
+    }
+
+    function stopCamera() {
+        if (cameraStream) {
+            cameraStream.getTracks().forEach(track => {
+                try { track.stop(); } catch (e) {}
+            });
+            cameraStream = null;
+        }
+        if (cameraVideoPreview) {
+            cameraVideoPreview.srcObject = null;
+        }
+        if (scannerProcessing) {
+            scannerProcessing.style.display = 'none';
+        }
+    }
+
+    if (btnCaptureShutter) {
+        btnCaptureShutter.addEventListener('click', () => {
+            if (cameraVideoPreview && cameraVideoPreview.videoWidth > 0 && cameraStream) {
+                cameraCanvas.width = cameraVideoPreview.videoWidth;
+                cameraCanvas.height = cameraVideoPreview.videoHeight;
+                const ctx = cameraCanvas.getContext('2d');
+                ctx.drawImage(cameraVideoPreview, 0, 0, cameraCanvas.width, cameraCanvas.height);
+                const dataUrl = cameraCanvas.toDataURL('image/jpeg', 0.85);
+                processOcrImage(dataUrl);
+            } else if (cameraFileInput) {
+                cameraFileInput.click();
+            }
+        });
+    }
+
+    if (btnChooseCameraPhoto && cameraFileInput) {
+        btnChooseCameraPhoto.addEventListener('click', () => {
+            cameraFileInput.click();
+        });
+    }
+
+    if (btnChooseGalleryPhoto && galleryFileInput) {
+        btnChooseGalleryPhoto.addEventListener('click', () => {
+            galleryFileInput.click();
+        });
+    }
+
+    function handleOcrFileInput(e) {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (loadEvt) => {
+            processOcrImage(loadEvt.target.result);
+        };
+        reader.readAsDataURL(file);
+        e.target.value = '';
+    }
+
+    if (cameraFileInput) {
+        cameraFileInput.addEventListener('change', handleOcrFileInput);
+    }
+    if (galleryFileInput) {
+        galleryFileInput.addEventListener('change', handleOcrFileInput);
+    }
+
+    async function processOcrImage(imageDataUrl) {
+        stopSpeech();
+        if (isRecording) {
+            stopRecording();
+        }
+
+        if (scannerProcessing) {
+            scannerProcessing.style.display = 'flex';
+            if (scannerStatusText) scannerStatusText.textContent = 'Scanning Notice...';
+            if (scannerStatusSub) scannerStatusSub.textContent = 'Extracting notice text & detecting language...';
+        }
+
+        const sourceLang = selectSrcLang.value;
+        const targetLang = selectTgtLang.value;
+        const targetLangName = selectTgtLang.options[selectTgtLang.selectedIndex].text.split(' ')[0];
+
+        try {
+            const response = await fetch('/api/ocr', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    image: imageDataUrl,
+                    source_lang: sourceLang,
+                    target_lang: targetLang
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.translated_text && result.original_text) {
+                stopCamera();
+                if (scannerDrawer) scannerDrawer.classList.remove('open');
+                emptyState.style.display = 'none';
+
+                renderOcrBubbles(imageDataUrl, result.original_text, result.translated_text, targetLang, targetLangName);
+
+                // Text to Speech: speak the translated notice in target language out loud immediately!
+                speakText(result.translated_text, targetLang);
+
+                // Save to history
+                saveToHistory('[📸 Notice] ' + result.original_text, result.translated_text, sourceLang, targetLang);
+                return;
+            } else if (window.Tesseract && typeof window.Tesseract.recognize === 'function') {
+                // Client-side Tesseract.js fallback
+                if (scannerStatusText) scannerStatusText.textContent = 'Running Client OCR...';
+                if (scannerStatusSub) scannerStatusSub.textContent = 'Local recognition engine processing...';
+
+                const ocrResult = await Tesseract.recognize(imageDataUrl, 'eng');
+                const detectedText = ocrResult?.data?.text?.trim();
+
+                if (detectedText) {
+                    const transResponse = await fetch('/api/translate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            text: detectedText,
+                            source_lang: sourceLang,
+                            target_lang: targetLang
+                        })
+                    });
+                    const transResult = await transResponse.json();
+                    if (transResponse.ok && transResult.translated_text) {
+                        stopCamera();
+                        if (scannerDrawer) scannerDrawer.classList.remove('open');
+                        emptyState.style.display = 'none';
+
+                        renderOcrBubbles(imageDataUrl, detectedText, transResult.translated_text, targetLang, targetLangName);
+                        speakText(transResult.translated_text, targetLang);
+                        saveToHistory('[📸 Notice] ' + detectedText, transResult.translated_text, sourceLang, targetLang);
+                        return;
+                    }
+                }
+            }
+
+            // Incomplete or unreadable notice
+            if (scannerStatusText) scannerStatusText.textContent = 'Notice Scan Incomplete';
+            if (scannerStatusSub) scannerStatusSub.textContent = result.error || 'No readable text detected. Please ensure notice is well-lit and held steady.';
+            setTimeout(() => {
+                if (scannerProcessing) scannerProcessing.style.display = 'none';
+            }, 3000);
+
+        } catch (err) {
+            console.error('OCR Processing error:', err);
+            if (scannerStatusText) scannerStatusText.textContent = 'Scan Error';
+            if (scannerStatusSub) scannerStatusSub.textContent = 'Could not process notice image. Please try again.';
+            setTimeout(() => {
+                if (scannerProcessing) scannerProcessing.style.display = 'none';
+            }, 3000);
+        }
+    }
+
+    function renderOcrBubbles(imageSrc, originalText, translatedText, targetLang, targetLangName) {
+        const bubbleGroup = document.createElement('div');
+        bubbleGroup.className = 'chat-bubble-group';
+
+        // 1. Source bubble with notice thumbnail and transcript
+        const sourceBubble = document.createElement('div');
+        sourceBubble.className = 'chat-bubble source ocr-bubble';
+        sourceBubble.innerHTML = `
+            <span class="bubble-lang"><i class="fa-solid fa-camera"></i> Scanned Notice</span>
+            <div class="ocr-image-preview">
+                <img src="${imageSrc}" alt="Notice thumbnail">
+            </div>
+            <span class="ocr-extracted-text">${escapeHtml(originalText)}</span>
+        `;
+        bubbleGroup.appendChild(sourceBubble);
+
+        // 2. Target translation bubble with TTS buttons
+        const targetBubble = document.createElement('div');
+        targetBubble.className = 'chat-bubble target';
+        targetBubble.innerHTML = `
+            <span class="bubble-lang">${targetLangName}</span>
+            <span class="translated-content">${escapeHtml(translatedText)}</span>
+            <div class="bubble-actions">
+                <button class="play-bubble-voice" title="Speak translation">
+                    <i class="fa-solid fa-volume-high"></i>
+                </button>
+                <button class="download-bubble-voice" title="Download translation audio">
+                    <i class="fa-solid fa-download"></i>
+                </button>
+            </div>
+        `;
+
+        const playBtn = targetBubble.querySelector('.play-bubble-voice');
+        playBtn.addEventListener('click', () => {
+            speakText(translatedText, targetLang);
+        });
+
+        const downloadBtn = targetBubble.querySelector('.download-bubble-voice');
+        downloadBtn.addEventListener('click', () => {
+            downloadAudio(translatedText, targetLang);
+        });
+
+        bubbleGroup.appendChild(targetBubble);
+        chatContainer.appendChild(bubbleGroup);
         scrollToBottom();
     }
 

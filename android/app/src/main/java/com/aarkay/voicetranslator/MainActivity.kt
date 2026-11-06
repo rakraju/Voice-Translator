@@ -9,11 +9,14 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.app.Activity
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.widget.Toast
 import android.speech.tts.TextToSpeech
 import android.webkit.JavascriptInterface
@@ -29,23 +32,52 @@ class MainActivity : AppCompatActivity() {
     private var pendingPermissionRequest: PermissionRequest? = null
     private var textToSpeech: TextToSpeech? = null
     private var isTtsReady = false
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     // Register callback for requesting RECORD_AUDIO permission at runtime
     private val requestAudioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            // Grant the pending WebView permission request if we have one
             pendingPermissionRequest?.let {
                 it.grant(it.resources)
             }
             Toast.makeText(this, "Microphone access granted!", Toast.LENGTH_SHORT).show()
         } else {
-            // Deny WebView permission request if user refused runtime permission
             pendingPermissionRequest?.deny()
             Toast.makeText(this, "Microphone access denied. Voice feature will not work.", Toast.LENGTH_LONG).show()
         }
         pendingPermissionRequest = null
+    }
+
+    // Register callback for requesting CAMERA permission at runtime
+    private val requestCameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            pendingPermissionRequest?.let {
+                it.grant(it.resources)
+            }
+            Toast.makeText(this, "Camera access granted!", Toast.LENGTH_SHORT).show()
+        } else {
+            pendingPermissionRequest?.deny()
+            Toast.makeText(this, "Camera access denied. Camera scanning will not work.", Toast.LENGTH_LONG).show()
+        }
+        pendingPermissionRequest = null
+    }
+
+    // Register callback for file chooser / camera capture intent
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val data = result.data
+            val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+            filePathCallback?.onReceiveValue(uris)
+        } else {
+            filePathCallback?.onReceiveValue(null)
+        }
+        filePathCallback = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -123,13 +155,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Handle WebView permission requests (e.g. microphone access requested by JS Web Speech API)
+        // Handle WebView permission requests (e.g. microphone and camera access)
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 val resources = request.resources
                 for (resource in resources) {
                     if (resource == PermissionRequest.RESOURCE_AUDIO_CAPTURE) {
-                        // Check if we already have system microphone permission
                         if (ContextCompat.checkSelfPermission(
                                 this@MainActivity,
                                 Manifest.permission.RECORD_AUDIO
@@ -137,14 +168,24 @@ class MainActivity : AppCompatActivity() {
                         ) {
                             request.grant(resources)
                         } else {
-                            // If not, cache the request and ask the user for runtime permission
                             pendingPermissionRequest = request
                             requestAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                         return
+                    } else if (resource == PermissionRequest.RESOURCE_VIDEO_CAPTURE) {
+                        if (ContextCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.CAMERA
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            request.grant(resources)
+                        } else {
+                            pendingPermissionRequest = request
+                            requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                        return
                     }
                 }
-                // For other resources, request grant directly or default handle
                 super.onPermissionRequest(request)
             }
 
@@ -153,6 +194,26 @@ class MainActivity : AppCompatActivity() {
                     pendingPermissionRequest = null
                 }
                 super.onPermissionRequestCanceled(request)
+            }
+
+            // Support camera capture / image upload in WebView
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
+                fileChooserParams: FileChooserParams?
+            ): Boolean {
+                this@MainActivity.filePathCallback?.onReceiveValue(null)
+                this@MainActivity.filePathCallback = filePathCallback
+                return try {
+                    val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = "image/*"
+                    }
+                    fileChooserLauncher.launch(intent)
+                    true
+                } catch (e: Exception) {
+                    this@MainActivity.filePathCallback = null
+                    false
+                }
             }
         }
 

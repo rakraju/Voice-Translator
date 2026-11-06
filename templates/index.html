@@ -11,7 +11,7 @@
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Main Style Sheet -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2.0.1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2.2.0">
 </head>
 <body>
     <div class="app-container">
@@ -150,10 +150,15 @@
                             <button id="btn-toggle-keyboard" class="text-button" title="Type instead of speaking">
                                 <i class="fa-regular fa-keyboard"></i> Type
                             </button>
+                            <button id="btn-open-scanner" class="text-button highlight-action" title="Scan text or notice with camera">
+                                <i class="fa-solid fa-camera"></i> Scan
+                            </button>
                             <button id="btn-toggle-continuous" class="text-button" title="Continuous listening">
                                 <i class="fa-solid fa-arrows-spin"></i> Continuous: <span id="continuous-status">OFF</span>
                             </button>
                         </div>
+                        <input type="file" id="camera-file-input" accept="image/*" capture="environment" style="display: none;">
+                        <input type="file" id="gallery-file-input" accept="image/*" style="display: none;">
                     </div>
                 </div>
 
@@ -222,13 +227,66 @@
                     </div>
                 </div>
 
+                <!-- Camera Notice Scanner Drawer -->
+                <div id="scanner-drawer" class="drawer">
+                    <div class="drawer-header">
+                        <h3><i class="fa-solid fa-camera" style="color: var(--primary); margin-right: 8px;"></i> Scan Notice / Text</h3>
+                        <button id="btn-close-scanner" class="icon-button" title="Close Scanner">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                    <div class="drawer-body scanner-drawer-body">
+                        <!-- Live Camera Viewfinder Box -->
+                        <div id="camera-viewfinder-box" class="camera-viewfinder-box">
+                            <video id="camera-video-preview" autoplay playsinline muted></video>
+                            <canvas id="camera-canvas" style="display: none;"></canvas>
+                            
+                            <!-- Scanner Target Frame Overlay -->
+                            <div class="scanner-frame-overlay">
+                                <div class="scanner-corner top-left"></div>
+                                <div class="scanner-corner top-right"></div>
+                                <div class="scanner-corner bottom-left"></div>
+                                <div class="scanner-corner bottom-right"></div>
+                                <div class="scanner-laser-line"></div>
+                                <span class="scanner-hint-text">Align notice inside box</span>
+                            </div>
+                        </div>
+
+                        <!-- Processing State Indicator (hidden by default) -->
+                        <div id="scanner-processing" class="scanner-processing" style="display: none;">
+                            <div class="scanner-spinner">
+                                <i class="fa-solid fa-circle-notch fa-spin"></i>
+                            </div>
+                            <h4 id="scanner-status-text">Scanning Notice...</h4>
+                            <p id="scanner-status-sub">Detecting text language and generating speech...</p>
+                        </div>
+
+                        <!-- Scanner Control Buttons -->
+                        <div class="scanner-actions">
+                            <button id="btn-capture-shutter" class="primary-button scanner-shutter-btn" title="Snap & Translate">
+                                <i class="fa-solid fa-camera"></i> Capture & Translate
+                            </button>
+                            <div class="scanner-alt-buttons">
+                                <button id="btn-choose-camera-photo" class="text-button" title="Use native phone camera">
+                                    <i class="fa-solid fa-camera-retro"></i> Phone Camera
+                                </button>
+                                <button id="btn-choose-gallery-photo" class="text-button" title="Pick image from gallery">
+                                    <i class="fa-solid fa-image"></i> Gallery
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
             <!-- Home Bar Indicator -->
             <div class="phone-home-indicator"></div>
         </div>
     </div>
 
+    <!-- Tesseract.js Client-Side OCR Fallback Library -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
     <!-- Main JavaScript File -->
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=2.0.1"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=2.2.0"></script>
 </body>
 </html>

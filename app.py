@@ -151,6 +151,125 @@ def translate():
         print(f"Translation error: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+def extract_text_from_image(image_bytes=None, base64_str=None):
+    """Multi-tier OCR extractor: OCR.space Engine 2 (signs/notices) -> Engine 1 -> local pytesseract fallback."""
+    import base64
+    import requests
+
+    ocr_api_key = os.environ.get('OCR_SPACE_API_KEY', 'helloworld')
+    url = 'https://api.ocrspace.com/parse/image'
+
+    # Prepare base64 image data uri if we have raw bytes
+    if not base64_str and image_bytes:
+        encoded = base64.b64encode(image_bytes).decode('utf-8')
+        base64_str = f"data:image/jpeg;base64,{encoded}"
+
+    # Tier 1: OCR.space Engine 2 (specialized for signs, notices, numbers, rotated text)
+    try:
+        payload = {
+            'apikey': ocr_api_key,
+            'base64Image': base64_str,
+            'OCREngine': '2',
+            'scale': 'true',
+            'detectOrientation': 'true',
+            'isOverlayRequired': 'false'
+        }
+        headers = {'User-Agent': 'VoiceTranslatorApp/2.0'}
+        r = requests.post(url, data=payload, headers=headers, timeout=18)
+        if r.status_code == 200:
+            res_json = r.json()
+            parsed_results = res_json.get('ParsedResults', [])
+            if parsed_results and parsed_results[0].get('ParsedText'):
+                text = parsed_results[0]['ParsedText'].strip()
+                if text:
+                    return text
+    except Exception as e:
+        print(f"OCR.space Engine 2 failed: {e}")
+
+    # Tier 2: OCR.space Engine 1
+    try:
+        payload = {
+            'apikey': ocr_api_key,
+            'base64Image': base64_str,
+            'OCREngine': '1',
+            'scale': 'true',
+            'detectOrientation': 'true',
+            'isOverlayRequired': 'false'
+        }
+        r = requests.post(url, data=payload, timeout=18)
+        if r.status_code == 200:
+            res_json = r.json()
+            parsed_results = res_json.get('ParsedResults', [])
+            if parsed_results and parsed_results[0].get('ParsedText'):
+                text = parsed_results[0]['ParsedText'].strip()
+                if text:
+                    return text
+    except Exception as e:
+        print(f"OCR.space Engine 1 failed: {e}")
+
+    # Tier 3: Local pytesseract if installed
+    try:
+        import pytesseract
+        from PIL import Image
+        if image_bytes:
+            img = Image.open(io.BytesIO(image_bytes))
+        else:
+            raw_b64 = base64_str.split(',', 1)[-1]
+            img = Image.open(io.BytesIO(base64.b64decode(raw_b64)))
+        text = pytesseract.image_to_string(img).strip()
+        if text:
+            return text
+    except Exception as e:
+        print(f"Local pytesseract fallback not available: {e}")
+
+    return ""
+
+
+@app.route('/api/ocr', methods=['POST'])
+def scan_and_translate_ocr():
+    target_lang = 'en'
+    source_lang = 'auto'
+    image_bytes = None
+    base64_str = None
+
+    if request.is_json:
+        data = request.get_json() or {}
+        base64_str = data.get('image', '')
+        target_lang = data.get('target_lang', 'en')
+        source_lang = data.get('source_lang', 'auto')
+    else:
+        if 'image' in request.files:
+            file = request.files['image']
+            image_bytes = file.read()
+        elif 'image' in request.form:
+            base64_str = request.form.get('image')
+        target_lang = request.form.get('target_lang', 'en')
+        source_lang = request.form.get('source_lang', 'auto')
+
+    if not image_bytes and not base64_str:
+        return jsonify({'error': 'No image provided for scanning'}), 400
+
+    try:
+        extracted_text = extract_text_from_image(image_bytes=image_bytes, base64_str=base64_str)
+        if not extracted_text:
+            return jsonify({
+                'error': 'No readable text was detected in the scanned notice. Please ensure the camera is steady, clear, and well-lit.'
+            }), 400
+
+        # Translate extracted text
+        translated_text = perform_translation(extracted_text, source_lang=source_lang, target_lang=target_lang)
+
+        return jsonify({
+            'original_text': extracted_text,
+            'translated_text': translated_text,
+            'source_lang': source_lang,
+            'target_lang': target_lang
+        })
+    except Exception as e:
+        print(f"OCR / Translation error: {e}")
+        return jsonify({'error': f'Scan processing failed: {str(e)}'}), 500
+
 VOICE_MAPPING = {
     'hi-in': {'Female': 'hi-IN-SwaraNeural', 'Male': 'hi-IN-MadhurNeural'},
     'en-in': {'Female': 'en-IN-NeerjaNeural', 'Male': 'en-IN-PrabhatNeural'},
