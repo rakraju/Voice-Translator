@@ -670,6 +670,45 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function preprocessCanvasForOcr(canvas) {
+        try {
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const d = imgData.data;
+            const contrast = 1.30; // 30% contrast boost for clear document text
+            const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+            for (let i = 0; i < d.length; i += 4) {
+                const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+                let c = factor * (gray - 128) + 128;
+                if (c > 175) c = 255;
+                else if (c < 80) c = 0;
+                d[i] = c;
+                d[i + 1] = c;
+                d[i + 2] = c;
+            }
+            ctx.putImageData(imgData, 0, 0);
+        } catch (e) {
+            console.warn('Canvas pre-processing skipped:', e);
+        }
+    }
+
+    function cleanOcrText(text, lang) {
+        if (!text) return '';
+        let cleaned = text.replace(/[\r\n]+/g, ' ');
+        cleaned = cleaned.replace(/[£€$¥¢©®™§|\\~`<>«»=+_]+/g, ' ');
+        cleaned = cleaned.replace(/[:;]{2,}/g, ' ');
+        cleaned = cleaned.replace(/\(\s*\)/g, ' ');
+        cleaned = cleaned.replace(/\[\s*\]/g, ' ');
+        cleaned = cleaned.replace(/\{\s*\}/g, ' ');
+
+        const cleanLang = (lang || '').toLowerCase().split('-')[0];
+        const isIndic = ['te', 'hi', 'ta', 'kn', 'ml', 'bn', 'mr', 'gu', 'pa', 'or', 'ur'].includes(cleanLang);
+        if (isIndic) {
+            cleaned = cleaned.replace(/(?<=[^\w]|^)[a-zA-Z]{1,4}(?=[^\w]|$)/g, ' ');
+        }
+        return cleaned.replace(/\s{2,}/g, ' ').trim();
+    }
+
     if (btnCaptureShutter) {
         btnCaptureShutter.addEventListener('click', () => {
             if (cameraVideoPreview && cameraVideoPreview.videoWidth > 0 && cameraStream) {
@@ -677,7 +716,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 cameraCanvas.height = cameraVideoPreview.videoHeight;
                 const ctx = cameraCanvas.getContext('2d');
                 ctx.drawImage(cameraVideoPreview, 0, 0, cameraCanvas.width, cameraCanvas.height);
-                const dataUrl = cameraCanvas.toDataURL('image/jpeg', 0.85);
+                preprocessCanvasForOcr(cameraCanvas);
+                const dataUrl = cameraCanvas.toDataURL('image/jpeg', 0.90);
                 processOcrImage(dataUrl);
             } else if (cameraFileInput) {
                 cameraFileInput.click();
@@ -802,7 +842,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.ok) {
                 const result = await response.json();
                 if (result.original_text && hasExpectedScript(result.original_text, sourceLang)) {
-                    detectedText = result.original_text;
+                    detectedText = cleanOcrText(result.original_text, sourceLang);
                     translatedText = result.translated_text;
                 } else if (result.original_text) {
                     console.warn('Server OCR text failed script check for', sourceLang, result.original_text);
@@ -820,7 +860,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (scannerStatusSub) scannerStatusSub.textContent = `Processing with ${sourceLangName} recognition engine...`;
 
             try {
-                const workerLangs = (tessLang !== 'eng') ? `${tessLang}+eng` : 'eng';
+                // For Indic scripts, use pure language model to avoid injecting random Latin letters
+                const cleanCode = sourceLang.split('-')[0].toLowerCase();
+                const isIndicLang = ['te', 'hi', 'ta', 'kn', 'ml', 'bn', 'mr', 'gu', 'pa', 'or', 'ur'].includes(cleanCode);
+                const workerLangs = isIndicLang ? tessLang : ((tessLang !== 'eng') ? `${tessLang}+eng` : 'eng');
+
                 const ocrResult = await Tesseract.recognize(imageDataUrl, workerLangs, {
                     logger: (m) => {
                         if (scannerStatusSub && m.status && m.progress != null) {
@@ -830,7 +874,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 });
 
-                detectedText = ocrResult?.data?.text?.trim() || '';
+                detectedText = cleanOcrText(ocrResult?.data?.text?.trim() || '', sourceLang);
 
                 if (detectedText) {
                     if (scannerStatusText) scannerStatusText.textContent = 'Translating Text...';

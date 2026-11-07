@@ -204,6 +204,29 @@ def verify_script_match(text, lang_code):
     return True
 
 
+def clean_ocr_text(text, lang_code=''):
+    """Cleans up OCR noise artifacts, isolated Latin noise characters, and stray symbols from scanned text."""
+    if not text:
+        return ""
+    import re
+    cleaned = re.sub(r'[\r\n]+', ' ', text)
+    # Remove OCR noise symbols like currency signs, repeated pipes, broken brackets, operators
+    cleaned = re.sub(r'[£€$¥¢©®™§|\\~`<>«»=+_]+', ' ', cleaned)
+    cleaned = re.sub(r'[:;]{2,}', ' ', cleaned)
+    cleaned = re.sub(r'\(\s*\)', ' ', cleaned)
+    cleaned = re.sub(r'\[\s*\]', ' ', cleaned)
+    cleaned = re.sub(r'\{\s*\}', ' ', cleaned)
+
+    clean_code = (lang_code or '').lower().split('-')[0]
+    is_indic = clean_code in ['te', 'hi', 'ta', 'kn', 'ml', 'bn', 'mr', 'gu', 'pa', 'or', 'ur']
+    if is_indic:
+        # Strip isolated short Latin noise words (e.g. 'wen', 'WH', 'Been', 'Le', 'DEF', 'mw', 'Por')
+        cleaned = re.sub(r'(?<=[^\w]|^)[a-zA-Z]{1,4}(?=[^\w]|$)', ' ', cleaned)
+
+    cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+    return cleaned
+
+
 def extract_text_from_image(image_bytes=None, base64_str=None, source_lang='auto'):
     """Multi-tier OCR extractor: OCR.space Engine 3/2/1 with language routing and script verification -> local pytesseract fallback."""
     import base64
@@ -221,12 +244,11 @@ def extract_text_from_image(image_bytes=None, base64_str=None, source_lang='auto
     ocr_lang = OCR_LANGUAGE_MAP.get(source_lang.lower() if source_lang else 'auto', OCR_LANGUAGE_MAP.get(clean_lang, 'auto'))
     is_indic = clean_lang in ['te', 'hi', 'ta', 'kn', 'ml', 'bn', 'mr', 'gu', 'pa', 'or', 'ur']
 
-    # For Indic scripts, Engine 2 does not support them and produces English gibberish.
-    # Use Engine 3 with auto or language code.
+    # For Indic scripts, prioritize exact language code to avoid Latin hallucination
     if is_indic:
         engine_sequence = [
-            {'engine': '3', 'lang': 'auto'},
             {'engine': '3', 'lang': ocr_lang},
+            {'engine': '3', 'lang': 'auto'},
         ]
     else:
         engine_sequence = [
@@ -247,7 +269,7 @@ def extract_text_from_image(image_bytes=None, base64_str=None, source_lang='auto
             }
             if attempt.get('lang') and attempt['lang'] != 'auto':
                 payload['language'] = attempt['lang']
-            headers = {'User-Agent': 'VoiceTranslatorApp/2.2'}
+            headers = {'User-Agent': 'VoiceTranslatorApp/2.3'}
             r = requests.post(url, data=payload, headers=headers, timeout=18)
             if r.status_code == 200:
                 res_json = r.json()
@@ -255,7 +277,7 @@ def extract_text_from_image(image_bytes=None, base64_str=None, source_lang='auto
                 if parsed_results and parsed_results[0].get('ParsedText'):
                     text = parsed_results[0]['ParsedText'].strip()
                     if text and verify_script_match(text, source_lang):
-                        return text
+                        return clean_ocr_text(text, source_lang)
                     elif text:
                         print(f"OCR.space text rejected due to script mismatch for {source_lang}: {text[:60]}")
         except Exception as e:
@@ -271,9 +293,9 @@ def extract_text_from_image(image_bytes=None, base64_str=None, source_lang='auto
             raw_b64 = base64_str.split(',', 1)[-1]
             img = Image.open(io.BytesIO(base64.b64decode(raw_b64)))
         tess_lang = ocr_lang if ocr_lang != 'auto' else 'eng'
-        text = pytesseract.image_to_string(img, lang=f"{tess_lang}+eng" if tess_lang != 'eng' else 'eng').strip()
+        text = pytesseract.image_to_string(img, lang=tess_lang).strip()
         if text and verify_script_match(text, source_lang):
-            return text
+            return clean_ocr_text(text, source_lang)
     except Exception as e:
         print(f"Local pytesseract fallback not available: {e}")
 

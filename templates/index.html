@@ -11,7 +11,7 @@
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Main Style Sheet -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2.3.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2.4.0">
 </head>
 <body>
     <div class="app-container">
@@ -274,6 +274,9 @@
                                     <i class="fa-solid fa-image"></i> Gallery
                                 </button>
                             </div>
+                            <p style="font-size: 0.72rem; color: var(--text-muted); text-align: center; margin: 8px 0 0 0; line-height: 1.3;">
+                                <i class="fa-solid fa-lightbulb" style="color: var(--accent);"></i> <strong>Tip:</strong> For small newspaper text, tap <strong>Phone Camera</strong> for ultra-sharp macro focus.
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -287,6 +290,6 @@
     <!-- Tesseract.js Client-Side OCR Fallback Library -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
     <!-- Main JavaScript File -->
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=2.3.0"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=2.4.0"></script>
 </body>
 </html>
