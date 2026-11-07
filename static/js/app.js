@@ -715,6 +715,56 @@ document.addEventListener('DOMContentLoaded', () => {
         galleryFileInput.addEventListener('change', handleOcrFileInput);
     }
 
+    const OCR_TESSERACT_LANGS = {
+        'te-IN': 'tel', 'te': 'tel',
+        'hi-IN': 'hin', 'hi': 'hin',
+        'ta-IN': 'tam', 'ta': 'tam',
+        'kn-IN': 'kan', 'kn': 'kan',
+        'ml-IN': 'mal', 'ml': 'mal',
+        'bn-IN': 'ben', 'bn': 'ben',
+        'mr-IN': 'mar', 'mr': 'mar',
+        'gu-IN': 'guj', 'gu': 'guj',
+        'pa-IN': 'pan', 'pa': 'pan',
+        'or-IN': 'ori', 'or': 'ori',
+        'ur-IN': 'urd', 'ur': 'urd',
+        'es-ES': 'spa', 'es': 'spa',
+        'fr-FR': 'fra', 'fr': 'fra',
+        'de-DE': 'deu', 'de': 'deu',
+        'ja-JP': 'jpn', 'ja': 'jpn',
+        'en-IN': 'eng', 'en': 'eng'
+    };
+
+    const SCRIPT_RANGES = {
+        'te': [0x0C00, 0x0C7F],
+        'hi': [0x0900, 0x097F],
+        'mr': [0x0900, 0x097F],
+        'ta': [0x0B80, 0x0BFF],
+        'kn': [0x0C80, 0x0CFF],
+        'ml': [0x0D00, 0x0D7F],
+        'bn': [0x0980, 0x09FF],
+        'gu': [0x0A80, 0x0AFF],
+        'pa': [0x0A00, 0x0A7F],
+        'or': [0x0B00, 0x0B7F],
+        'ur': [0x0600, 0x06FF],
+        'ja': [0x3040, 0x30FF]
+    };
+
+    function hasExpectedScript(text, lang) {
+        if (!text || !lang) return true;
+        const clean = lang.split('-')[0].toLowerCase();
+        const range = SCRIPT_RANGES[clean];
+        if (!range) return true;
+        let count = 0;
+        for (let i = 0; i < text.length; i++) {
+            const code = text.charCodeAt(i);
+            if (code >= range[0] && code <= range[1]) count++;
+        }
+        if (text.trim().length > 10 && count === 0) {
+            return false;
+        }
+        return true;
+    }
+
     async function processOcrImage(imageDataUrl) {
         stopSpeech();
         if (isRecording) {
@@ -729,8 +779,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const sourceLang = selectSrcLang.value;
         const targetLang = selectTgtLang.value;
+        const sourceLangName = selectSrcLang.options[selectSrcLang.selectedIndex].text.split(' ')[0];
         const targetLangName = selectTgtLang.options[selectTgtLang.selectedIndex].text.split(' ')[0];
+        const cleanLang = sourceLang.split('-')[0].toLowerCase();
+        const tessLang = OCR_TESSERACT_LANGS[sourceLang] || OCR_TESSERACT_LANGS[cleanLang] || 'eng';
 
+        let detectedText = '';
+        let translatedText = '';
+
+        // 1. First attempt: Server-Side Multi-Tier OCR
         try {
             const response = await fetch('/api/ocr', {
                 method: 'POST',
@@ -742,30 +799,43 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
             });
 
-            const result = await response.json();
+            if (response.ok) {
+                const result = await response.json();
+                if (result.original_text && hasExpectedScript(result.original_text, sourceLang)) {
+                    detectedText = result.original_text;
+                    translatedText = result.translated_text;
+                } else if (result.original_text) {
+                    console.warn('Server OCR text failed script check for', sourceLang, result.original_text);
+                }
+            } else {
+                console.warn('Server OCR response status:', response.status);
+            }
+        } catch (serverErr) {
+            console.warn('Server OCR network error, will try client OCR:', serverErr);
+        }
 
-            if (response.ok && result.translated_text && result.original_text) {
-                stopCamera();
-                if (scannerDrawer) scannerDrawer.classList.remove('open');
-                emptyState.style.display = 'none';
+        // 2. Second attempt: Client-Side Tesseract.js with exact language pack
+        if (!detectedText && window.Tesseract && typeof window.Tesseract.recognize === 'function') {
+            if (scannerStatusText) scannerStatusText.textContent = `Reading ${sourceLangName} Text...`;
+            if (scannerStatusSub) scannerStatusSub.textContent = `Processing with ${sourceLangName} recognition engine...`;
 
-                renderOcrBubbles(imageDataUrl, result.original_text, result.translated_text, targetLang, targetLangName);
+            try {
+                const workerLangs = (tessLang !== 'eng') ? `${tessLang}+eng` : 'eng';
+                const ocrResult = await Tesseract.recognize(imageDataUrl, workerLangs, {
+                    logger: (m) => {
+                        if (scannerStatusSub && m.status && m.progress != null) {
+                            const pct = Math.round(m.progress * 100);
+                            scannerStatusSub.textContent = `${sourceLangName} OCR ${m.status}: ${pct}%`;
+                        }
+                    }
+                });
 
-                // Text to Speech: speak the translated notice in target language out loud immediately!
-                speakText(result.translated_text, targetLang);
-
-                // Save to history
-                saveToHistory('[📸 Notice] ' + result.original_text, result.translated_text, sourceLang, targetLang);
-                return;
-            } else if (window.Tesseract && typeof window.Tesseract.recognize === 'function') {
-                // Client-side Tesseract.js fallback
-                if (scannerStatusText) scannerStatusText.textContent = 'Running Client OCR...';
-                if (scannerStatusSub) scannerStatusSub.textContent = 'Local recognition engine processing...';
-
-                const ocrResult = await Tesseract.recognize(imageDataUrl, 'eng');
-                const detectedText = ocrResult?.data?.text?.trim();
+                detectedText = ocrResult?.data?.text?.trim() || '';
 
                 if (detectedText) {
+                    if (scannerStatusText) scannerStatusText.textContent = 'Translating Text...';
+                    if (scannerStatusSub) scannerStatusSub.textContent = `Translating ${sourceLangName} to ${targetLangName}...`;
+
                     const transResponse = await fetch('/api/translate', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -777,33 +847,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                     const transResult = await transResponse.json();
                     if (transResponse.ok && transResult.translated_text) {
-                        stopCamera();
-                        if (scannerDrawer) scannerDrawer.classList.remove('open');
-                        emptyState.style.display = 'none';
-
-                        renderOcrBubbles(imageDataUrl, detectedText, transResult.translated_text, targetLang, targetLangName);
-                        speakText(transResult.translated_text, targetLang);
-                        saveToHistory('[📸 Notice] ' + detectedText, transResult.translated_text, sourceLang, targetLang);
-                        return;
+                        translatedText = transResult.translated_text;
                     }
                 }
+            } catch (tessErr) {
+                console.error('Client Tesseract OCR error:', tessErr);
             }
-
-            // Incomplete or unreadable notice
-            if (scannerStatusText) scannerStatusText.textContent = 'Notice Scan Incomplete';
-            if (scannerStatusSub) scannerStatusSub.textContent = result.error || 'No readable text detected. Please ensure notice is well-lit and held steady.';
-            setTimeout(() => {
-                if (scannerProcessing) scannerProcessing.style.display = 'none';
-            }, 3000);
-
-        } catch (err) {
-            console.error('OCR Processing error:', err);
-            if (scannerStatusText) scannerStatusText.textContent = 'Scan Error';
-            if (scannerStatusSub) scannerStatusSub.textContent = 'Could not process notice image. Please try again.';
-            setTimeout(() => {
-                if (scannerProcessing) scannerProcessing.style.display = 'none';
-            }, 3000);
         }
+
+        // 3. Render and speak results if text was successfully recognized
+        if (detectedText && translatedText) {
+            stopCamera();
+            if (scannerDrawer) scannerDrawer.classList.remove('open');
+            emptyState.style.display = 'none';
+
+            renderOcrBubbles(imageDataUrl, detectedText, translatedText, targetLang, targetLangName);
+            speakText(translatedText, targetLang);
+            saveToHistory('[📸 Notice] ' + detectedText, translatedText, sourceLang, targetLang);
+            return;
+        }
+
+        // 4. If neither produced readable text
+        if (scannerStatusText) scannerStatusText.textContent = 'Scan Incomplete';
+        if (scannerStatusSub) scannerStatusSub.textContent = `Could not clearly read ${sourceLangName} text. Please hold camera steady and ensure good lighting.`;
+        setTimeout(() => {
+            if (scannerProcessing) scannerProcessing.style.display = 'none';
+        }, 3500);
     }
 
     function renderOcrBubbles(imageSrc, originalText, translatedText, targetLang, targetLangName) {

@@ -152,63 +152,116 @@ def translate():
         return jsonify({'error': str(e)}), 500
 
 
-def extract_text_from_image(image_bytes=None, base64_str=None):
-    """Multi-tier OCR extractor: OCR.space Engine 2 (signs/notices) -> Engine 1 -> local pytesseract fallback."""
+OCR_LANGUAGE_MAP = {
+    'te': 'tel', 'te-in': 'tel',
+    'hi': 'hin', 'hi-in': 'hin',
+    'ta': 'tam', 'ta-in': 'tam',
+    'kn': 'kan', 'kn-in': 'kan',
+    'ml': 'mal', 'ml-in': 'mal',
+    'bn': 'ben', 'bn-in': 'ben',
+    'mr': 'mar', 'mr-in': 'mar',
+    'gu': 'guj', 'gu-in': 'guj',
+    'pa': 'pan', 'pa-in': 'pan',
+    'or': 'ori', 'or-in': 'ori',
+    'ur': 'urd', 'ur-in': 'urd',
+    'es': 'spa', 'es-es': 'spa',
+    'fr': 'fre', 'fr-fr': 'fre',
+    'de': 'ger', 'de-de': 'ger',
+    'ja': 'jpn', 'ja-jp': 'jpn',
+    'en': 'eng', 'en-in': 'eng',
+}
+
+SCRIPT_UNICODE_RANGES = {
+    'te': (0x0C00, 0x0C7F),  # Telugu
+    'hi': (0x0900, 0x097F),  # Devanagari (Hindi)
+    'mr': (0x0900, 0x097F),  # Marathi
+    'ta': (0x0B80, 0x0BFF),  # Tamil
+    'kn': (0x0C80, 0x0CFF),  # Kannada
+    'ml': (0x0D00, 0x0D7F),  # Malayalam
+    'bn': (0x0980, 0x09FF),  # Bengali
+    'gu': (0x0A80, 0x0AFF),  # Gujarati
+    'pa': (0x0A00, 0x0A7F),  # Gurmukhi (Punjabi)
+    'or': (0x0B00, 0x0B7F),  # Odia
+    'ur': (0x0600, 0x06FF),  # Urdu/Arabic
+    'ja': (0x3040, 0x30FF),  # Japanese
+}
+
+def verify_script_match(text, lang_code):
+    """Verifies that extracted text is not hallucinated Latin gibberish when an Indic/non-Latin script was requested."""
+    if not text or not lang_code:
+        return True
+    clean_code = lang_code.lower().split('-')[0]
+    if clean_code in ['en', 'es', 'fr', 'de', 'auto']:
+        return True
+    char_range = SCRIPT_UNICODE_RANGES.get(clean_code)
+    if not char_range:
+        return True
+    start, end = char_range
+    count = sum(1 for c in text if start <= ord(c) <= end)
+    # If the text has 0 matching script characters and is fairly long, it's hallucinated
+    if len(text.strip()) > 10 and count == 0:
+        return False
+    return True
+
+
+def extract_text_from_image(image_bytes=None, base64_str=None, source_lang='auto'):
+    """Multi-tier OCR extractor: OCR.space Engine 3/2/1 with language routing and script verification -> local pytesseract fallback."""
     import base64
     import requests
 
     ocr_api_key = os.environ.get('OCR_SPACE_API_KEY', 'helloworld')
-    url = 'https://api.ocrspace.com/parse/image'
+    url = 'https://api.ocr.space/parse/image'
 
     # Prepare base64 image data uri if we have raw bytes
     if not base64_str and image_bytes:
         encoded = base64.b64encode(image_bytes).decode('utf-8')
         base64_str = f"data:image/jpeg;base64,{encoded}"
 
-    # Tier 1: OCR.space Engine 2 (specialized for signs, notices, numbers, rotated text)
-    try:
-        payload = {
-            'apikey': ocr_api_key,
-            'base64Image': base64_str,
-            'OCREngine': '2',
-            'scale': 'true',
-            'detectOrientation': 'true',
-            'isOverlayRequired': 'false'
-        }
-        headers = {'User-Agent': 'VoiceTranslatorApp/2.0'}
-        r = requests.post(url, data=payload, headers=headers, timeout=18)
-        if r.status_code == 200:
-            res_json = r.json()
-            parsed_results = res_json.get('ParsedResults', [])
-            if parsed_results and parsed_results[0].get('ParsedText'):
-                text = parsed_results[0]['ParsedText'].strip()
-                if text:
-                    return text
-    except Exception as e:
-        print(f"OCR.space Engine 2 failed: {e}")
+    clean_lang = (source_lang or 'auto').lower().split('-')[0]
+    ocr_lang = OCR_LANGUAGE_MAP.get(source_lang.lower() if source_lang else 'auto', OCR_LANGUAGE_MAP.get(clean_lang, 'auto'))
+    is_indic = clean_lang in ['te', 'hi', 'ta', 'kn', 'ml', 'bn', 'mr', 'gu', 'pa', 'or', 'ur']
 
-    # Tier 2: OCR.space Engine 1
-    try:
-        payload = {
-            'apikey': ocr_api_key,
-            'base64Image': base64_str,
-            'OCREngine': '1',
-            'scale': 'true',
-            'detectOrientation': 'true',
-            'isOverlayRequired': 'false'
-        }
-        r = requests.post(url, data=payload, timeout=18)
-        if r.status_code == 200:
-            res_json = r.json()
-            parsed_results = res_json.get('ParsedResults', [])
-            if parsed_results and parsed_results[0].get('ParsedText'):
-                text = parsed_results[0]['ParsedText'].strip()
-                if text:
-                    return text
-    except Exception as e:
-        print(f"OCR.space Engine 1 failed: {e}")
+    # For Indic scripts, Engine 2 does not support them and produces English gibberish.
+    # Use Engine 3 with auto or language code.
+    if is_indic:
+        engine_sequence = [
+            {'engine': '3', 'lang': 'auto'},
+            {'engine': '3', 'lang': ocr_lang},
+        ]
+    else:
+        engine_sequence = [
+            {'engine': '2', 'lang': ocr_lang if ocr_lang != 'eng' else ''},
+            {'engine': '1', 'lang': ocr_lang},
+            {'engine': '3', 'lang': 'auto'}
+        ]
 
-    # Tier 3: Local pytesseract if installed
+    for attempt in engine_sequence:
+        try:
+            payload = {
+                'apikey': ocr_api_key,
+                'base64Image': base64_str,
+                'OCREngine': attempt['engine'],
+                'scale': 'true',
+                'detectOrientation': 'true',
+                'isOverlayRequired': 'false'
+            }
+            if attempt.get('lang') and attempt['lang'] != 'auto':
+                payload['language'] = attempt['lang']
+            headers = {'User-Agent': 'VoiceTranslatorApp/2.2'}
+            r = requests.post(url, data=payload, headers=headers, timeout=18)
+            if r.status_code == 200:
+                res_json = r.json()
+                parsed_results = res_json.get('ParsedResults', [])
+                if parsed_results and parsed_results[0].get('ParsedText'):
+                    text = parsed_results[0]['ParsedText'].strip()
+                    if text and verify_script_match(text, source_lang):
+                        return text
+                    elif text:
+                        print(f"OCR.space text rejected due to script mismatch for {source_lang}: {text[:60]}")
+        except Exception as e:
+            print(f"OCR.space attempt {attempt} failed: {e}")
+
+    # Local pytesseract fallback if installed
     try:
         import pytesseract
         from PIL import Image
@@ -217,8 +270,9 @@ def extract_text_from_image(image_bytes=None, base64_str=None):
         else:
             raw_b64 = base64_str.split(',', 1)[-1]
             img = Image.open(io.BytesIO(base64.b64decode(raw_b64)))
-        text = pytesseract.image_to_string(img).strip()
-        if text:
+        tess_lang = ocr_lang if ocr_lang != 'auto' else 'eng'
+        text = pytesseract.image_to_string(img, lang=f"{tess_lang}+eng" if tess_lang != 'eng' else 'eng').strip()
+        if text and verify_script_match(text, source_lang):
             return text
     except Exception as e:
         print(f"Local pytesseract fallback not available: {e}")
@@ -251,11 +305,12 @@ def scan_and_translate_ocr():
         return jsonify({'error': 'No image provided for scanning'}), 400
 
     try:
-        extracted_text = extract_text_from_image(image_bytes=image_bytes, base64_str=base64_str)
+        extracted_text = extract_text_from_image(image_bytes=image_bytes, base64_str=base64_str, source_lang=source_lang)
         if not extracted_text:
             return jsonify({
-                'error': 'No readable text was detected in the scanned notice. Please ensure the camera is steady, clear, and well-lit.'
-            }), 400
+                'error': f'Could not accurately read {source_lang} notice on server.',
+                'fallback_client': True
+            }), 422
 
         # Translate extracted text
         translated_text = perform_translation(extracted_text, source_lang=source_lang, target_lang=target_lang)
@@ -266,6 +321,9 @@ def scan_and_translate_ocr():
             'source_lang': source_lang,
             'target_lang': target_lang
         })
+    except Exception as e:
+        print(f"OCR / Translation error: {e}")
+        return jsonify({'error': f'Scan processing failed: {str(e)}'}), 500
     except Exception as e:
         print(f"OCR / Translation error: {e}")
         return jsonify({'error': f'Scan processing failed: {str(e)}'}), 500

@@ -9,6 +9,7 @@ local.properties
 *.jks
 *.apk
 *.aab
+*.traineddata
 
 # Python build files
 __pycache__/
