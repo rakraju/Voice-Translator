@@ -11,8 +11,8 @@ android {
         applicationId = "com.AARKAYSVoiceTranslator.myapp"
         minSdk = 24
         targetSdk = 36
-        versionCode = 14
-        versionName = "2.2"
+        versionCode = 15
+        versionName = "2.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
